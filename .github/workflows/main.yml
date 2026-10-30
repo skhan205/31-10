@@ -1,0 +1,76 @@
+name: DEVXRDP – Super Persistent
+
+on:
+  workflow_dispatch:
+
+jobs:
+  rdp:
+    runs-on: windows-latest
+    timeout-minutes: 305
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pre-Create Directories
+        shell: powershell
+        run: |
+          $password = "${{ secrets.RDP_PASSWORD }}"
+          $sec = ConvertTo-SecureString $password -AsPlainText -Force
+
+          if (-not (Get-LocalUser -Name "DEVXRDP" -ErrorAction SilentlyContinue)) {
+            New-LocalUser -Name "DEVXRDP" -Password $sec -AccountNeverExpires
+            Add-LocalGroupMember Administrators "DEVXRDP"
+          }
+
+          New-Item -Path "C:\Users\DEVXRDP\AppData\Local\Google\Chrome\User Data" -ItemType Directory -Force
+          New-Item -Path "C:\PersistentData" -ItemType Directory -Force
+          New-Item -Path "C:\Users\DEVXRDP\Downloads" -ItemType Directory -Force
+
+      - name: Restore Session Cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            C:\Users\DEVXRDP\AppData\Local\Google\Chrome\User Data
+            C:\Users\DEVXRDP\Downloads
+            C:\PersistentData
+          key: rdp-v4-${{ github.run_id }}
+          restore-keys: |
+            rdp-v4-
+
+      - name: Start Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+
+      - name: Setup RDP
+        shell: powershell
+        run: |
+          Set-ItemProperty `
+            "HKLM:\System\CurrentControlSet\Control\Terminal Server" `
+            -Name fDenyTSConnections `
+            -Value 0
+
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+      - name: RDP Active Timer
+        shell: powershell
+        run: |
+          $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 |
+            Select-Object -First 1
+
+          Write-Host "Tailscale IP: $ip"
+          Write-Host "RDP User: DEVXRDP"
+
+          Start-Sleep -Seconds 18000
+
+      - name: Save Cache Always
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            C:\Users\DEVXRDP\AppData\Local\Google\Chrome\User Data
+            C:\Users\DEVXRDP\Downloads
+            C:\PersistentData
+          key: rdp-v4-${{ github.run_id }}-${{ github.run_attempt }}
